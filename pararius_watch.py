@@ -5,6 +5,7 @@ Pararius watcher: checks a Pararius search page and pushes new listings to your 
 Run modes
   python pararius_watch.py --dry-run       fetch + print what it sees, no notifications, no state saved
   python pararius_watch.py --test-notify   send a test push to your phone
+  python pararius_watch.py --save-html     save the raw search page to last_page.html (for debugging)
   python pararius_watch.py                 one check (for cron / GitHub Actions)
   python pararius_watch.py --loop 120      check forever, every ~120 s (for a laptop / server)
 
@@ -17,6 +18,7 @@ Configuration (environment variables)
   TELEGRAM_TOKEN / TELEGRAM_CHAT_ID   optional, if you prefer Telegram
   STATE_FILE      default seen.json (next to this script)
   PAGES           how many result pages to check (default 1)
+  EXCLUDE_TYPES   listing types to skip, e.g. "room" (default: keep everything)
 """
 from __future__ import annotations
 
@@ -51,6 +53,8 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 STATE_FILE = Path(os.getenv("STATE_FILE") or HERE / "seen.json")
 PAGES = int(os.getenv("PAGES") or "1")
+# listing types to ignore, from the URL: apartment, studio, house, room (default: keep everything)
+EXCLUDE_TYPES = {t.strip() for t in (os.getenv("EXCLUDE_TYPES") or "").split(",") if t.strip()}
 KEEP_DAYS = 60  # forget listings after this many days
 
 HEADERS = {
@@ -88,7 +92,7 @@ def fetch(session, url: str) -> str:
     low = text[:20000].lower()
     looks_challenged = any(m in low for m in BLOCK_MARKERS) and "-for-rent/" not in text
     if r.status_code in (403, 429, 503) or looks_challenged:
-        (HERE / "debug_last_page.html").write_text(text)
+        (HERE / "debug_last_page.html").write_text(text, encoding="utf-8")
         title = re.search(r"<title>(.*?)</title>", text, re.S | re.I)
         server = r.headers.get("server", "?")
         raise Blocked(f"HTTP {r.status_code} from {url} (server: {server}, "
@@ -114,20 +118,29 @@ def parse_listings(html: str) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
     found: dict[str, dict] = {}
 
+    def listing_ids(el) -> set[str]:
+        ids = set()
+        for x in el.find_all("a", href=True):
+            mm = DETAIL_RE.match(urlparse(urljoin(BASE, x["href"])).path)
+            if mm:
+                ids.add(mm.group("id"))
+        return ids
+
     for a in soup.find_all("a", href=True):
         path = urlparse(urljoin(BASE, a["href"])).path
         m = DETAIL_RE.match(path)
         if not m:
             continue
         lid = m.group("id")
-        # climb to the card that contains this link (first ancestor that also holds a price)
+        if lid in found:
+            continue
+        # The card = the largest ancestor that contains links to THIS listing only.
+        # (Stops before reaching a container that also holds other listings, so details
+        # from a neighbouring card can never bleed in.)
         card = a
-        for _ in range(8):
-            if card.parent is None:
-                break
+        while card.parent is not None and card.parent.name not in ("body", "html", "[document]") \
+                and listing_ids(card.parent) <= {lid}:
             card = card.parent
-            if "€" in card.get_text(" ", strip=True):
-                break
         text = card.get_text(" ", strip=True)
 
         title_el = card.select_one(".listing-search-item__title, h2, h3") or a
@@ -140,8 +153,9 @@ def parse_listings(html: str) -> list[dict]:
         rooms = re.search(r"(\d+)\s*rooms?\b", text)
         low = text.lower()
 
-        item = found.setdefault(lid, {
+        found[lid] = {
             "id": lid,
+            "type": m.group("type"),
             "url": urljoin(BASE, path),
             "title": title,
             "location": loc_el.get_text(" ", strip=True) if loc_el else "",
@@ -152,10 +166,7 @@ def parse_listings(html: str) -> list[dict]:
             "highlighted": "highlighted" in low[:80],
             "new": low.startswith("new ") or " new " in low[:40],
             "under_option": "under option" in low or "rented under" in low,
-        })
-        # prefer the longest/most informative title seen for this id
-        if len(title) > len(item["title"]):
-            item["title"] = title
+        }
     return list(found.values())
 
 
@@ -163,7 +174,7 @@ def parse_listings(html: str) -> list[dict]:
 def load_state() -> dict:
     if STATE_FILE.exists():
         try:
-            return json.loads(STATE_FILE.read_text())
+            return json.loads(STATE_FILE.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             pass
     return {"seen": {}, "blocked_notified": None}
@@ -172,7 +183,7 @@ def load_state() -> dict:
 def save_state(state: dict) -> None:
     cutoff = (datetime.now(timezone.utc) - timedelta(days=KEEP_DAYS)).isoformat()
     state["seen"] = {k: v for k, v in state["seen"].items() if v >= cutoff}
-    STATE_FILE.write_text(json.dumps(state, indent=1, sort_keys=True))
+    STATE_FILE.write_text(json.dumps(state, indent=1, sort_keys=True), encoding="utf-8")
 
 
 # ---------------------------------------------------------------- notifications
@@ -219,10 +230,12 @@ def check(dry_run: bool = False) -> int:
                 html = fetch(session, page_url(url, p))
                 page = parse_listings(html)
                 if not page and p == 1:
-                    (HERE / "debug_last_page.html").write_text(html)
+                    (HERE / "debug_last_page.html").write_text(html, encoding="utf-8")
                     print(f"WARNING: 0 listings parsed from {url} – layout may have changed "
                           f"(saved debug_last_page.html)")
                 for l in page:
+                    if l["type"] in EXCLUDE_TYPES:
+                        continue
                     listings.setdefault(l["id"], l)
                 if p < PAGES:
                     time.sleep(random.uniform(2, 5))
@@ -276,6 +289,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--test-notify", action="store_true")
+    ap.add_argument("--save-html", action="store_true")
     ap.add_argument("--loop", type=int, metavar="SECONDS", help="keep checking every N seconds")
     args = ap.parse_args()
 
@@ -283,6 +297,12 @@ def main() -> None:
         notify("Pararius watcher test", "If you see this, notifications work 🎉",
                click=SEARCH_URLS[0])
         print("Test notification sent.")
+        return
+
+    if args.save_html:
+        html = fetch(make_session(), SEARCH_URLS[0])
+        (HERE / "last_page.html").write_text(html, encoding="utf-8")
+        print(f"Saved {len(html):,} characters to {HERE / 'last_page.html'}")
         return
 
     if not args.loop:
