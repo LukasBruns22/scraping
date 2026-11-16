@@ -38,14 +38,14 @@ BASE = "https://www.pararius.com"
 HERE = Path(__file__).resolve().parent
 
 SEARCH_URLS = [u.strip() for u in os.getenv(
-    "SEARCH_URLS", f"{BASE}/apartments/amsterdam/0-1500").split(",") if u.strip()]
-MAX_PRICE = int(os.getenv("MAX_PRICE", "1500"))
+    "SEARCH_URLS") or f"{BASE}/apartments/amsterdam/0-1500").split(",") if u.strip()]
+MAX_PRICE = int(os.getenv("MAX_PRICE") or "1500")
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "").strip()
-NTFY_SERVER = os.getenv("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
+NTFY_SERVER = (os.getenv("NTFY_SERVER") or "https://ntfy.sh").rstrip("/")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
-STATE_FILE = Path(os.getenv("STATE_FILE", HERE / "seen.json"))
-PAGES = int(os.getenv("PAGES", "1"))
+STATE_FILE = Path(os.getenv("STATE_FILE") or HERE / "seen.json")
+PAGES = int(os.getenv("PAGES") or "1")
 KEEP_DAYS = 60  # forget listings after this many days
 
 HEADERS = {
