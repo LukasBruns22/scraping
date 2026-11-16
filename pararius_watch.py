@@ -34,6 +34,11 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
+try:  # makes the request look like real Chrome at the TLS/HTTP2 level (pip install curl_cffi)
+    from curl_cffi import requests as cffi_requests
+except ImportError:
+    cffi_requests = None
+
 BASE = "https://www.pararius.com"
 HERE = Path(__file__).resolve().parent
 
@@ -66,13 +71,28 @@ class Blocked(Exception):
 
 
 # ---------------------------------------------------------------- fetching / parsing
-def fetch(session: requests.Session, url: str) -> str:
-    r = session.get(url, headers=HEADERS, timeout=30)
+def make_session():
+    if cffi_requests and os.getenv("IMPERSONATE", "1") != "0":
+        print("using curl_cffi (Chrome impersonation)")
+        s = cffi_requests.Session(impersonate="chrome")
+        s.headers.update({"Accept-Language": HEADERS["Accept-Language"]})
+        return s
+    s = requests.Session()
+    s.headers.update(HEADERS)
+    return s
+
+
+def fetch(session, url: str) -> str:
+    r = session.get(url, timeout=30)
     text = r.text or ""
     low = text[:20000].lower()
     looks_challenged = any(m in low for m in BLOCK_MARKERS) and "-for-rent/" not in text
     if r.status_code in (403, 429, 503) or looks_challenged:
-        raise Blocked(f"HTTP {r.status_code} from {url} (looks like a bot check / rate limit)")
+        (HERE / "debug_last_page.html").write_text(text)
+        title = re.search(r"<title>(.*?)</title>", text, re.S | re.I)
+        server = r.headers.get("server", "?")
+        raise Blocked(f"HTTP {r.status_code} from {url} (server: {server}, "
+                      f"page title: {title.group(1).strip()[:80] if title else '-'})")
     r.raise_for_status()
     return text
 
@@ -189,7 +209,7 @@ def describe(l: dict) -> tuple[str, str]:
 def check(dry_run: bool = False) -> int:
     state = load_state()
     first_run = not state["seen"]
-    session = requests.Session()
+    session = make_session()
     now = datetime.now(timezone.utc).isoformat()
 
     listings: dict[str, dict] = {}

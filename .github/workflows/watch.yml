@@ -7,6 +7,10 @@ on:
         description: "Only print what it sees (no push, no state)"
         type: boolean
         default: true
+      impersonate:
+        description: "Make the request look like real Chrome (curl_cffi)"
+        type: boolean
+        default: true
   # Uncomment to run automatically every 5 minutes (off-peak minutes to reduce GitHub's delays).
   # Note: GitHub's Actions terms frown on using Actions as an always-on service.
   # schedule:
@@ -38,6 +42,7 @@ jobs:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           SEARCH_URLS: ${{ vars.SEARCH_URLS }}
           MAX_PRICE: ${{ vars.MAX_PRICE }}
+          IMPERSONATE: ${{ inputs.impersonate == false && '0' || '1' }}
         run: |
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             python pararius_watch.py --dry-run
@@ -50,6 +55,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: debug-page
+          include-hidden-files: true
           path: debug_last_page.html
           if-no-files-found: ignore
 
