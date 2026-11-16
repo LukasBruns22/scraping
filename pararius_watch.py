@@ -9,7 +9,7 @@ Run modes
   python pararius_watch.py                 one check (for cron / GitHub Actions)
   python pararius_watch.py --loop 120      check forever, every ~120 s (for a laptop / server)
 
-Configuration (environment variables)
+Configuration (environment variables, or KEY=VALUE lines in settings.env next to this script)
   SEARCH_URLS     comma-separated Pararius search URLs
                   default: https://www.pararius.com/apartments/amsterdam/0-1500
   MAX_PRICE       extra safety filter in EUR (default 1500, 0 = off)
@@ -43,6 +43,15 @@ except ImportError:
 
 BASE = "https://www.pararius.com"
 HERE = Path(__file__).resolve().parent
+
+# Optional settings.env next to this script (KEY=VALUE per line). Not committed to git.
+_settings = HERE / "settings.env"
+if _settings.exists():
+    for _line in _settings.read_text(encoding="utf-8").splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _v = _line.split("=", 1)
+            os.environ.setdefault(_k.strip(), _v.strip().strip('"'))
 
 SEARCH_URLS = [u.strip() for u in (os.getenv(
     "SEARCH_URLS") or f"{BASE}/apartments/amsterdam/0-1500").split(",") if u.strip()]
@@ -160,7 +169,7 @@ def parse_listings(html: str) -> list[dict]:
             "title": title,
             "location": loc_el.get_text(" ", strip=True) if loc_el else "",
             "price": _num(price_txt.split("pcm")[0]) if price_txt else None,
-            "price_text": price_txt,
+            "price_text": re.sub(r"(pcm|per month).*$", r"\1", price_txt).strip(),
             "size_m2": int(size.group(1)) if size else None,
             "rooms": int(rooms.group(1)) if rooms else None,
             "highlighted": "highlighted" in low[:80],
@@ -308,6 +317,12 @@ def main() -> None:
     if not args.loop:
         sys.exit(check(args.dry_run))
 
+    if sys.platform == "win32":
+        # stop Windows from sleeping on its own while the watcher runs (closing the lid still sleeps)
+        import ctypes
+        ctypes.windll.kernel32.SetThreadExecutionState(0x80000000 | 0x00000001)  # CONTINUOUS | SYSTEM_REQUIRED
+        print("Keeping this PC awake while the watcher runs (closing the lid will still sleep it).")
+    print(f"Watching {', '.join(SEARCH_URLS)} every ~{args.loop}s. Press Ctrl+C to stop.")
     while True:
         try:
             check(args.dry_run)

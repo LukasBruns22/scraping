@@ -1,2 +1,5 @@
 __pycache__/
 debug_last_page.html
+last_page.html
+settings.env
+seen.json
