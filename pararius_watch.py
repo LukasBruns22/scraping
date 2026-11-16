@@ -37,7 +37,7 @@ from bs4 import BeautifulSoup
 BASE = "https://www.pararius.com"
 HERE = Path(__file__).resolve().parent
 
-SEARCH_URLS = [u.strip() for u in os.getenv(
+SEARCH_URLS = [u.strip() for u in (os.getenv(
     "SEARCH_URLS") or f"{BASE}/apartments/amsterdam/0-1500").split(",") if u.strip()]
 MAX_PRICE = int(os.getenv("MAX_PRICE") or "1500")
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "").strip()
